@@ -1,0 +1,36 @@
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+
+venv/
+env/
+.venv/
+rag/   
+
+
+.ipynb_checkpoints/
+
+
+.env
+
+
+movie_index/
+*.index
+*.faiss
+
+
+.streamlit/
+
+
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
