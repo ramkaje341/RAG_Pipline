@@ -10,17 +10,13 @@ from langchain.schema import Document
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 
-# -----------------------------
-# CONFIG
-# -----------------------------
+
 INDEX_PATH = "movie_index"
 
 st.set_page_config(page_title="Movie RAG App", layout="centered")
 st.title("🎬 Movie Recommendation System (RAG)")
 
-# -----------------------------
-# LOAD DATA
-# -----------------------------
+
 @st.cache_data
 def load_data():
     df = pd.read_csv("tmdb_5000_movies.csv")
@@ -61,26 +57,20 @@ def get_vectorstore(df):
 
     vectorstore = FAISS.from_documents(docs, embedding)
 
-    # ✅ Save index (important)
+   
     vectorstore.save_local(INDEX_PATH)
 
     return vectorstore
 
 vectorstore = get_vectorstore(df)
 
-# -----------------------------
-# RETRIEVER (FASTER)
-# -----------------------------
+
 retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 
-# -----------------------------
-# LLM (FASTER MODEL)
-# -----------------------------
-llm = Ollama(model="phi")  # ⚡ faster than mistral
 
-# -----------------------------
-# PROMPT (SHORT + OPTIMIZED)
-# -----------------------------
+llm = Ollama(model="phi")  
+
+
 prompt_template = """
 You are a movie recommendation assistant.
 
@@ -100,9 +90,7 @@ PROMPT = PromptTemplate(
     input_variables=["context", "question"]
 )
 
-# -----------------------------
-# RAG CHAIN
-# -----------------------------
+
 qa_chain = RetrievalQA.from_chain_type(
     llm=llm,
     retriever=retriever,
@@ -110,9 +98,7 @@ qa_chain = RetrievalQA.from_chain_type(
     chain_type_kwargs={"prompt": PROMPT}
 )
 
-# -----------------------------
-# UI
-# -----------------------------
+
 query = st.text_input("Ask for movie recommendations:")
 
 if st.button("Recommend") and query:
