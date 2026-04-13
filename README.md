@@ -1,6 +1,16 @@
 # 🎬 Movie Recommendation System – RAG Pipeline
 
-A sophisticated **Retrieval-Augmented Generation (RAG)** solution designed to provide personalized movie recommendations and detailed explanations. By combining **FAISS** for high-speed similarity search and **Ollama** for local LLM generation, this system goes beyond basic filtering to offer context-aware cinematic insights.
+A sophisticated **Retrieval-Augmented Generation (RAG)** solution designed to provide personalized movie recommendations and detailed explanations. By combining **FAISS** for high-speed similarity search and local LLMs via **Ollama**, this app delivers fast, context-aware suggestions based on the TMDB 5000 Movies dataset.
+
+---
+
+## 📈 Key Features
+
+* **Hybrid Context:** Uses both movie descriptions and metadata (genres, keywords).
+* **Natural Language Queries:** Ask like: "Movies like Interstellar".
+* **Explainable Recommendations:** Provides reasons for each suggested movie.
+* **Local Inference:** Runs completely offline using Ollama (no API cost).
+* **Fast Retrieval:** FAISS enables efficient similarity search.
 
 ---
 
@@ -15,12 +25,12 @@ This project addresses the "analysis paralysis" of choosing a movie by:
 
 ## 🏗️ System Architecture
 
-The pipeline follows a modular RAG workflow:
+The pipeline follows a streamlined RAG workflow inside a single application:
 
-1.  **Data Preprocessing:** Cleaning the TMDB 5000 dataset using **Pandas**.
-2.  **Embedding Generation:** Converting movie overviews and genres into high-dimensional vectors using **SentenceTransformers**.
+1.  **Data Preprocessing:** Cleaning the TMDB 5000 dataset using **Pandas** to extract titles, overviews, genres, and keywords.
+2.  **Embedding Generation:** Converting movie metadata into high-dimensional vectors using **HuggingFaceEmbeddings** (`all-MiniLM-L6-v2`).
 3.  **Vector Indexing:** Storing embeddings in **FAISS** for optimized, low-latency similarity retrieval.
-4.  **Augmented Generation:** Injecting retrieved movie data into a structured prompt for **Ollama (Phi/Mistral)** to generate a conversational response.
+4.  **Augmented Generation:** Injecting retrieved movie data into a structured prompt for **Ollama (Phi)** to generate a conversational response.
 
 ---
 
@@ -29,31 +39,26 @@ The pipeline follows a modular RAG workflow:
 ### ⚙️ Backend / AI Layer
 * **Python:** Core programming language.
 * **LangChain:** Framework for prompt chaining, retrieval management, and LLM integration.
-* **FAISS (Facebook AI Similarity Search):** High-performance vector database for similarity search.
+* **FAISS:** High-performance vector database for similarity search.
 * **SentenceTransformers:** Generates state-of-the-art text embeddings.
 
 ### 🤖 LLM Layer
 * **Ollama:** Facilitates running large language models locally.
-* **Phi / Mistral:** Local models used for generating natural language recommendations and summaries.
+* **Phi:** Local, lightweight model used for generating fast natural language recommendations and summaries.
 
 ### 🌐 Frontend / UI
 * **Streamlit:** Interactive web interface for user queries and displaying results.
-
-### 🗄️ Data Layer
-* **Dataset:** TMDB 5000 Movies (CSV).
-* **Pandas:** Used for data loading, cleaning, and feature engineering.
 
 ---
 
 ## 📂 Repository Structure
 
 ```text
-├── app.py                # Streamlit UI and main logic
-├── vector_store.py       # Script for FAISS indexing and embeddings
-├── preprocess.py         # Data cleaning and Pandas logic
+├── app.py                # Streamlit UI, Data Preprocessing, and FAISS indexing logic
 ├── requirements.txt      # Project dependencies
 ├── tmdb_5000_movies.csv  # Raw movie dataset
-└── faiss_index/          # Local directory for stored vector indices
+└── movie_index/          # Auto-generated local directory for the FAISS vector index
+```
 
 ---
 
@@ -61,26 +66,49 @@ The pipeline follows a modular RAG workflow:
 
 ### 1. Prerequisites
 * **Python 3.9+**
-* **Ollama** installed and running locally.
-* Pull your preferred model:  
+* **Ollama** installed and running locally on your machine.
+* Pull the required Phi model via Ollama:  
   ```bash
   ollama pull phi
----
+  ```
 
-## Clone the repository
-git clone [https://github.com/ramkaje341/RAG_Pipline.git](https://github.com/ramkaje341/RAG_Pipline.git)
+### 2. Clone the Repository
+```bash
+git clone https://github.com/ramkaje341/RAG_Pipline.git
 cd RAG_Pipline
----
+```
 
-## Install dependencies
+### 3. Install Dependencies
+```bash
 pip install -r requirements.txt
+```
+
+### 4. Usage
+*Note: The vector index is automatically generated and saved when you first run the app, so you don't need a separate `vector_store.py` script!*
+
+Launch the Streamlit app:
+```bash
+streamlit run app.py
+```
 
 ---
-# First, generate the vector index from the dataset
-python vector_store.py
 
-# Launch the Streamlit dashboard
-streamlit run app.py
+## 🧪 Example Queries
 
+Try asking the recommendation engine:
+* *Movies like Interstellar*
+* *Romantic movies with sad ending*
+* *Action movies with war theme*
+* *Feel good friendship movies*
 
+---
 
+## 👤 Author
+
+**Sriram K**
+
+---
+
+## 📝 License
+
+This project is intended for educational and analytical purposes.
