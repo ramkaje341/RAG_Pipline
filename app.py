@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import ast
 import os
 
@@ -7,14 +8,13 @@ from langchain_community.llms import Ollama
 from langchain_community.vectorstores import FAISS
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.schema import Document
-from langchain.chains import RetrievalQA
-from langchain.prompts import PromptTemplate
+from rank_bm25 import BM25Okapi
 
 
 INDEX_PATH = "movie_index"
 
 st.set_page_config(page_title="Movie RAG App", layout="centered")
-st.title("🎬 Movie Recommendation System (RAG)")
+st.title("🎬 Movie Recommendation System (Hybrid RAG)")
 
 
 @st.cache_data
@@ -33,10 +33,27 @@ def load_data():
 df = load_data()
 
 
-@st.cache_resource
-def get_vectorstore(df):
-    embedding = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+documents = []
+doc_map = {}  # map text → index
 
+for idx, row in df.iterrows():
+    text = f"""
+Title: {row['title']}
+Overview: {row['overview']}
+Genres: {row['genres']}
+Keywords: {row['keywords']}
+"""
+    documents.append(text.strip())
+    doc_map[text.strip()] = idx
+
+
+tokenized_docs = [doc.lower().split() for doc in documents]
+bm25 = BM25Okapi(tokenized_docs)
+
+
+@st.cache_resource
+def get_vectorstore(documents):
+    embedding = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
     if os.path.exists(INDEX_PATH):
         return FAISS.load_local(
@@ -45,65 +62,82 @@ def get_vectorstore(df):
             allow_dangerous_deserialization=True
         )
 
-    
-    docs = []
-    for _, row in df.iterrows():
-        text = f"""
-        Title: {row['title']}
-        Genres: {row['genres']}
-        Keywords: {row['keywords']}
-        """
-        docs.append(Document(page_content=text))
+    docs = [Document(page_content=doc) for doc in documents]
 
     vectorstore = FAISS.from_documents(docs, embedding)
-
-   
     vectorstore.save_local(INDEX_PATH)
 
     return vectorstore
 
-vectorstore = get_vectorstore(df)
+vectorstore = get_vectorstore(documents)
 
 
-retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+def hybrid_retrieve(query, k=5):
+
+    # ---- FAISS ----
+    docs_and_scores = vectorstore.similarity_search_with_score(query, k=k*2)
+
+    semantic_scores = {}
+    for doc, score in docs_and_scores:
+        text = doc.page_content.strip()
+        if text in doc_map:
+            idx = doc_map[text]
+            semantic_scores[idx] = 1 / (1 + score)
+
+    # ---- BM25 ----
+    tokenized_query = query.lower().split()
+    bm25_scores = bm25.get_scores(tokenized_query)
+
+    # ---- Combine ----
+    final_scores = {}
+    for i in range(len(documents)):
+        final_scores[i] = (0.6 * semantic_scores.get(i, 0)) + (0.4 * bm25_scores[i])
+
+    top_indices = sorted(final_scores, key=final_scores.get, reverse=True)[:k]
+
+    return [documents[i] for i in top_indices]
 
 
-llm = Ollama(model="phi")  
-
-
-prompt_template = """
-You are a movie recommendation assistant.
-
-Based on the following movies:
-{context}
-
-Answer the question:
-{question}
-
-Give:
-- 3 to 5 movie recommendations
-- One short reason for each
-"""
-
-PROMPT = PromptTemplate(
-    template=prompt_template,
-    input_variables=["context", "question"]
-)
-
-
-qa_chain = RetrievalQA.from_chain_type(
-    llm=llm,
-    retriever=retriever,
-    chain_type="stuff",
-    chain_type_kwargs={"prompt": PROMPT}
-)
+llm = Ollama(model="phi3:mini")  
 
 
 query = st.text_input("Ask for movie recommendations:")
 
 if st.button("Recommend") and query:
     with st.spinner("Thinking..."):
-        result = qa_chain.run(query)
 
+        retrieved_docs = hybrid_retrieve(query)
+        context = "\n\n".join(retrieved_docs)
+
+        
+        prompt = f"""
+You are a movie recommendation system.
+
+STRICT RULES:
+- Do NOT generate code
+- Do NOT explain logic
+- ONLY recommend movies from the given list
+
+Movies:
+{context}
+
+User Query:
+{query}
+
+Output format:
+
+1. Movie Name - Reason
+2. Movie Name - Reason
+3. Movie Name - Reason
+
+Only give the answer.
+"""
+
+        result = llm.invoke(prompt).strip()
+
+  
     st.subheader("🎯 Recommendations")
-    st.write(result)
+
+    for line in result.split("\n"):
+        if line.strip():
+            st.markdown(f"- {line}")
