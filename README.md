@@ -1,105 +1,104 @@
-# 🎬 Movie Recommendation System – RAG Pipeline
+# 🎬 Movie Recommendation System – Agentic RAG Pipeline
 
-A sophisticated **Retrieval-Augmented Generation (RAG)** solution designed to provide personalized movie recommendations and detailed explanations. By combining **FAISS** for high-speed similarity search and local LLMs via **Ollama**, this app delivers fast, context-aware suggestions based on the TMDB 5000 Movies dataset.
+A **LangGraph-powered agentic RAG pipeline** for movie recommendations. The system retrieves candidates from a local FAISS vector store, verifies them using an LLM, and falls back to a live Tavily web search when local results don't match the query.
+
+---
+
+## 🏗️ Pipeline Architecture
+
+```
+retrieve_local → generate → extract_titles → verify ──pass──► END
+                                                     ──fail──► internet_fallback → END
+```
+
+| Node | Role |
+|---|---|
+| `retrieve_local` | FAISS similarity search — top 3 movies from TMDB dataset |
+| `generate` | Groq generates recommendations strictly from FAISS context |
+| `extract_titles` | Regex parses movie titles from the LLM response |
+| `verify` | Groq fact-checks each title against the query |
+| `internet_fallback` | Tavily web search → Groq synthesizes from fetched results only |
+
+The verify step is what makes this agentic — if FAISS returns irrelevant movies (e.g. querying by director when the index has no director metadata), the graph self-corrects and routes to a live web search instead of returning wrong results.
 
 ---
 
 ## 📈 Key Features
 
-* **Hybrid Context:** Uses both movie descriptions and metadata (genres, keywords).
-* **Natural Language Queries:** Ask like: "Movies like Interstellar".
-* **Explainable Recommendations:** Provides reasons for each suggested movie.
-* **Local Inference:** Runs completely offline using Ollama (no API cost).
-* **Fast Retrieval:** FAISS enables efficient similarity search.
-
----
-
-## 📊 Project Overview
-
-This project addresses the "analysis paralysis" of choosing a movie by:
-* **Semantic Search:** Understanding user intent (e.g., "movies about space travel and isolation") rather than just matching keywords.
-* **Contextual Explanations:** Using an LLM to explain *why* a specific movie was recommended based on its plot and metadata.
-* **Local Privacy:** Running the entire inference pipeline locally using Ollama and FAISS.
-
----
-
-## 🏗️ System Architecture
-
-The pipeline follows a streamlined RAG workflow inside a single application:
-
-1.  **Data Preprocessing:** Cleaning the TMDB 5000 dataset using **Pandas** to extract titles, overviews, genres, and keywords.
-2.  **Embedding Generation:** Converting movie metadata into high-dimensional vectors using **HuggingFaceEmbeddings** (`all-MiniLM-L6-v2`).
-3.  **Vector Indexing:** Storing embeddings in **FAISS** for optimized, low-latency similarity retrieval.
-4.  **Augmented Generation:** Injecting retrieved movie data into a structured prompt for **Ollama (Phi)** to generate a conversational response.
+- **Agentic self-correction:** Verifies local results before returning them, falls back to internet search on failure
+- **Live web search fallback:** Tavily search with Groq synthesis — grounded in fetched content, not LLM training data
+- **Streaming output:** Responses stream word-by-word via `st.write_stream`
+- **Agent transparency:** `st.status` panel shows which path the graph took and what was verified
+- **Semantic retrieval:** FAISS + `all-MiniLM-L6-v2` embeddings over TMDB 5000 dataset
 
 ---
 
 ## 🛠️ Tech Stack
 
-### ⚙️ Backend / AI Layer
-* **Python:** Core programming language.
-* **LangChain:** Framework for prompt chaining, retrieval management, and LLM integration.
-* **FAISS:** High-performance vector database for similarity search.
-* **SentenceTransformers:** Generates state-of-the-art text embeddings.
-
-### 🤖 LLM Layer
-* **Ollama:** Facilitates running large language models locally.
-* **Phi:** Local, lightweight model used for generating fast natural language recommendations and summaries.
-
-### 🌐 Frontend / UI
-* **Streamlit:** Interactive web interface for user queries and displaying results.
+| Layer | Technology |
+|---|---|
+| Orchestration | LangGraph `StateGraph` |
+| LLM | Groq API (`llama-3.1-8b-instant`) |
+| Vector store | FAISS (`faiss-cpu`) |
+| Embeddings | HuggingFace `all-MiniLM-L6-v2` |
+| Web search | Tavily |
+| UI | Streamlit |
+| Data | TMDB 5000 Movies dataset |
 
 ---
 
 ## 📂 Repository Structure
 
-```text
-├── app.py                # Streamlit UI, Data Preprocessing, and FAISS indexing logic
+```
+├── app.py                # LangGraph pipeline + Streamlit UI
 ├── requirements.txt      # Project dependencies
+├── .env                  # API keys (not committed)
 ├── tmdb_5000_movies.csv  # Raw movie dataset
-└── movie_index/          # Auto-generated local directory for the FAISS vector index
+└── movie_index/          # Auto-generated FAISS index
 ```
 
 ---
 
 ## 🚀 Getting Started
 
-### 1. Prerequisites
-* **Python 3.9+**
-* **Ollama** installed and running locally on your machine.
-* Pull the required Phi model via Ollama:  
-  ```bash
-  ollama pull phi
-  ```
-
-### 2. Clone the Repository
+### 1. Clone the repository
 ```bash
 git clone https://github.com/ramkaje341/RAG_Pipeline.git
 cd RAG_Pipeline
 ```
 
-### 3. Install Dependencies
+### 2. Install dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Usage
-*Note: The vector index is automatically generated and saved when you first run the app, so you don't need a separate `vector_store.py` script!*
+### 3. Set up API keys
+Create a `.env` file in the project root:
+```
+GROQ_API_KEY=your_groq_api_key_here
+TAVILY_API_KEY=your_tavily_api_key_here
+```
 
-Launch the Streamlit app:
+- Groq API key: [console.groq.com](https://console.groq.com)
+- Tavily API key: [app.tavily.com](https://app.tavily.com)
+
+### 4. Run
 ```bash
 streamlit run app.py
 ```
+
+The FAISS index is built automatically on first run and saved to `movie_index/`.
 
 ---
 
 ## 🧪 Example Queries
 
-Try asking the recommendation engine:
-* *Movies like Interstellar*
-* *Romantic movies with sad ending*
-* *Action movies with war theme*
-* *Feel good friendship movies*
+| Query | Path taken |
+|---|---|
+| *Sci-fi movies about space* | Local FAISS (passes verify) |
+| *Christopher Nolan movies* | Internet fallback (FAISS has no director metadata) |
+| *Best Rajamouli films* | Internet fallback |
+| *Romantic movies with sad ending* | Local FAISS |
 
 ---
 
