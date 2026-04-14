@@ -74,8 +74,8 @@ The pipeline follows a streamlined RAG workflow inside a single application:
 
 ### 2. Clone the Repository
 ```bash
-git clone https://github.com/ramkaje341/RAG_Pipline.git
-cd RAG_Pipline
+git clone https://github.com/ramkaje341/RAG_Pipeline.git
+cd RAG_Pipeline
 ```
 
 ### 3. Install Dependencies
