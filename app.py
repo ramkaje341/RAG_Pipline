@@ -78,31 +78,32 @@ def get_movie_details(title):
     if not TMDB_API_KEY:
         return None
 
-    clean = clean_title(title)
+    year_match = re.search(r'\((\d{4})\)', title)
+    year = year_match.group(1) if year_match else None
+    cleaned = clean_title(title)
 
-    url = "https://api.themoviedb.org/3/search/movie"
-    params = {"api_key": TMDB_API_KEY, "query": clean}
+    queries = [cleaned]
+    if ":" in cleaned:
+        queries.append(cleaned.split(":")[0].strip())
 
-    try:
-        data = requests.get(url, params=params).json()
-
-        if data.get("results"):
-            for movie in data["results"]:
-                if clean.lower() in movie.get("title", "").lower():
+    for q in queries:
+        for params in [
+            {**{"api_key": TMDB_API_KEY, "query": q}, **({"primary_release_year": year} if year else {})},
+            {"api_key": TMDB_API_KEY, "query": q},
+        ]:
+            try:
+                data = requests.get(
+                    "https://api.themoviedb.org/3/search/movie", params=params
+                ).json()
+                if data.get("results"):
+                    movie = data["results"][0]
                     return {
                         "poster": f"https://image.tmdb.org/t/p/w500{movie['poster_path']}" if movie.get("poster_path") else None,
                         "rating": movie.get("vote_average"),
-                        "overview": movie.get("overview")
+                        "overview": movie.get("overview"),
                     }
-
-            movie = data["results"][0]
-            return {
-                "poster": f"https://image.tmdb.org/t/p/w500{movie['poster_path']}" if movie.get("poster_path") else None,
-                "rating": movie.get("vote_average"),
-                "overview": movie.get("overview")
-            }
-    except:
-        return None
+            except:
+                continue
 
     return None
 
@@ -125,18 +126,18 @@ def retrieve_local_node(state: AgentState) -> AgentState:
 
 
 def generate_node(state: AgentState) -> AgentState:
-    prompt = f"""
-You are a movie recommendation assistant.
+    prompt = f"""You are a movie recommendation assistant.
 
 Movies available:
 {state["context"]}
 
 Request: {state["query"]}
 
-Return ONLY:
-1. Movie Name - Reason
-2. Movie Name - Reason
-"""
+Return ONLY a numbered list:
+1. Movie Name (Year) - one sentence reason
+2. Movie Name (Year) - one sentence reason
+
+Always include the release year in parentheses."""
     return {"response": llm.invoke(prompt).content}
 
 
@@ -146,7 +147,7 @@ def extract_titles_node(state: AgentState) -> AgentState:
     for line in state["response"].split("\n"):
         match = re.match(r"\d+\.\s*(.*?)\s*-", line)
         if match:
-            titles.append(clean_title(match.group(1)))
+            titles.append(match.group(1).strip())
 
     return {"movie_titles": titles}
 
@@ -176,21 +177,32 @@ Format:
 def internet_fallback_node(state: AgentState) -> AgentState:
     try:
         tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
-        results = tavily.search(query=f"{state['query']} movies", max_results=8)["results"]
+        results = tavily.search(query=f"{state['query']} best films", max_results=8)["results"]
     except:
         results = []
 
-    context = "\n\n".join([r['title'] for r in results if r.get("title")])
+    context = "\n\n".join([
+        f"{r['title']}: {r['content'][:200]}"
+        for r in results if r.get("title") and r.get("content")
+    ])
 
-    prompt = f"""
-Extract ONLY movie titles:
+    if not context:
+        return {"response": "No results found."}
 
+    prompt = f"""You are a movie recommendation assistant. Using ONLY the web results below, list movie recommendations.
+
+Web results:
 {context}
 
-Return:
-1. Movie Name (Year)
-2. Movie Name (Year)
-"""
+Request: {state["query"]}
+
+Output a numbered list. Each line must be exactly:
+N. Movie Title (Year) - one sentence about the film
+
+Rules:
+- Always include the release year in parentheses after the title
+- Only include real movie titles found in the results above
+- No commentary, no disclaimers, nothing after the list"""
 
     return {"response": llm.invoke(prompt).content}
 
@@ -249,7 +261,7 @@ if st.button("Recommend") and query:
                 if details and details["poster"]:
                     st.image(details["poster"], width=200)
 
-                st.markdown(f"### {title}")
+                st.markdown(f"### {clean_title(title)}")
 
                 if details:
                     st.write(f"⭐ Rating: {details['rating']}")
@@ -260,8 +272,12 @@ if st.button("Recommend") and query:
 
     st.divider()
 
-    st.subheader("💬 Explanation")
+    explanation_lines = [
+        line.strip() for line in result["response"].split("\n")
+        if re.match(r"^\d+\.", line.strip())
+    ]
 
-    for line in result["response"].split("\n"):
-        if line.strip():
+    if explanation_lines:
+        st.subheader("💬 Explanation")
+        for line in explanation_lines:
             st.markdown(f"- {line}")
