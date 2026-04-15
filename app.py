@@ -1,13 +1,12 @@
 import re
-import time
 import streamlit as st
 import pandas as pd
 import ast
 import os
+import requests
 
 from typing import TypedDict
 from dotenv import load_dotenv
-# from langchain_community.llms import Ollama
 from langchain_groq import ChatGroq
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -17,10 +16,10 @@ from langgraph.graph import StateGraph, END
 
 load_dotenv()
 
-
 INDEX_PATH = "movie_index"
+TMDB_API_KEY = os.getenv("TMDB_API_KEY")
 
-st.set_page_config(page_title="Movie RAG App", layout="centered")
+st.set_page_config(page_title="Movie RAG App", layout="wide")
 st.title("🎬 Movie Recommendation System (RAG)")
 
 
@@ -36,6 +35,7 @@ def load_data():
     df['keywords'] = clean_json(df['keywords'])
 
     return df
+
 
 
 @st.cache_resource
@@ -56,15 +56,56 @@ def get_vectorstore():
     return vectorstore
 
 
+
 @st.cache_resource
 def get_llm():
-    # return Ollama(model="llama3.1")
     return ChatGroq(model="llama-3.1-8b-instant", api_key=os.getenv("GROQ_API_KEY"))
 
 
 vectorstore = get_vectorstore()
 retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
 llm = get_llm()
+
+
+def clean_title(title):
+    title = re.sub(r"\(\d{4}\)", "", title)
+    title = title.split(" - ")[0]
+    return title.strip()
+
+
+
+def get_movie_details(title):
+    if not TMDB_API_KEY:
+        return None
+
+    clean = clean_title(title)
+
+    url = "https://api.themoviedb.org/3/search/movie"
+    params = {"api_key": TMDB_API_KEY, "query": clean}
+
+    try:
+        data = requests.get(url, params=params).json()
+
+        if data.get("results"):
+            for movie in data["results"]:
+                if clean.lower() in movie.get("title", "").lower():
+                    return {
+                        "poster": f"https://image.tmdb.org/t/p/w500{movie['poster_path']}" if movie.get("poster_path") else None,
+                        "rating": movie.get("vote_average"),
+                        "overview": movie.get("overview")
+                    }
+
+            movie = data["results"][0]
+            return {
+                "poster": f"https://image.tmdb.org/t/p/w500{movie['poster_path']}" if movie.get("poster_path") else None,
+                "rating": movie.get("vote_average"),
+                "overview": movie.get("overview")
+            }
+    except:
+        return None
+
+    return None
+
 
 
 class AgentState(TypedDict):
@@ -76,6 +117,7 @@ class AgentState(TypedDict):
     failed_movies: list
 
 
+
 def retrieve_local_node(state: AgentState) -> AgentState:
     docs = retriever.invoke(state["query"])
     context = "\n\n".join([doc.page_content for doc in docs])
@@ -83,43 +125,30 @@ def retrieve_local_node(state: AgentState) -> AgentState:
 
 
 def generate_node(state: AgentState) -> AgentState:
-    prompt = f"""You are a movie recommendation assistant.
+    prompt = f"""
+You are a movie recommendation assistant.
 
-Movies available (use ONLY these, do not add any others):
+Movies available:
 {state["context"]}
 
 Request: {state["query"]}
 
-Reply with ONLY a numbered list using movies from the list above. No introduction. No extra movies.
-1. Title - one sentence reason
-2. Title - one sentence reason"""
-
+Return ONLY:
+1. Movie Name - Reason
+2. Movie Name - Reason
+"""
     return {"response": llm.invoke(prompt).content}
 
 
 def extract_titles_node(state: AgentState) -> AgentState:
-    response = state["response"]
-
     titles = []
-    for line in response.strip().split("\n"):
-        line = re.sub(r'^\d+[\.\)]\s*', '', line.strip())
-        if not line:
-            continue
-        title = line.split(" - ")[0] if " - " in line else None
-        if title:
-            title = title.strip().strip('"\'*()–-[]')
-            if 2 < len(title) < 60:
-                titles.append(title)
 
-    if titles:
-        return {"movie_titles": titles}
+    for line in state["response"].split("\n"):
+        match = re.match(r"\d+\.\s*(.*?)\s*-", line)
+        if match:
+            titles.append(clean_title(match.group(1)))
 
-    matches = re.findall(r'"?([A-Z][A-Za-z\'\s:!?&]+?)"?\s*\((\d{4})\)', response)
-    if matches:
-        return {"movie_titles": [m[0].strip() for m in matches]}
-
-    matches = re.findall(r'(?:^|[,\n]\s*)([A-Z][A-Za-z\'\s:!?&]{3,40})(?=\s*[\"(,])', response)
-    return {"movie_titles": [m.strip() for m in matches if m.strip()]}
+    return {"movie_titles": titles}
 
 
 def verify_node(state: AgentState) -> AgentState:
@@ -128,56 +157,47 @@ def verify_node(state: AgentState) -> AgentState:
         return {"verified": False, "failed_movies": []}
 
     checks = "\n".join([f'- "{t}"' for t in titles])
-    prompt = f"""For each movie below, answer Yes if it matches "{state["query"]}", or No if it does not. Be accurate and factual.
-
-Reply in this exact format, one line per movie, nothing else:
-"Movie Title": Yes/No
+    prompt = f"""
+For each movie below, answer Yes or No if it matches "{state["query"]}".
 
 Movies:
-{checks}"""
+{checks}
+
+Format:
+"Movie": Yes/No
+"""
 
     result = llm.invoke(prompt).content
-    failed = [t for t in titles if f'"{t}": No' in result or f'"{t}":No' in result]
-    verified = len(failed) < len(titles) * 0.5
+    failed = [t for t in titles if f'"{t}": No' in result]
 
-    return {"verified": verified, "failed_movies": failed}
+    return {"verified": len(failed) < len(titles) * 0.5, "failed_movies": failed}
 
 
 def internet_fallback_node(state: AgentState) -> AgentState:
     try:
         tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
-        results = tavily.search(query=f"{state['query']} best films", max_results=8)["results"]
-    except Exception:
+        results = tavily.search(query=f"{state['query']} movies", max_results=8)["results"]
+    except:
         results = []
 
-    context = "\n\n".join([
-        f"{r['title']}: {r['content'][:200]}"
-        for r in results if r.get("title") and r.get("content")
-    ])
+    context = "\n\n".join([r['title'] for r in results if r.get("title")])
 
-    if not context:
-        return {"response": "No web results found. Please try again later."}
+    prompt = f"""
+Extract ONLY movie titles:
 
-    prompt = f"""You are a movie recommendation assistant. Using the web results below, extract real movie recommendations for the request.
-
-Web results:
 {context}
 
-Request: {state["query"]}
-
-Output a clean numbered list of up to 5 movies. Each line must be exactly:
-N. Movie Title (Year) - one sentence about the film
-
-Rules:
-- Only include actual movie titles, no ranking commentary
-- Do not repeat the same movie twice
-- No introductions, no extra text, nothing after the list"""
+Return:
+1. Movie Name (Year)
+2. Movie Name (Year)
+"""
 
     return {"response": llm.invoke(prompt).content}
 
 
-def verify_decision(state: AgentState) -> str:
+def verify_decision(state: AgentState):
     return "pass" if state.get("verified") else "fail"
+
 
 
 @st.cache_resource
@@ -209,33 +229,39 @@ def build_graph():
 agent = build_graph()
 
 
-def word_streamer(text):
-    for word in text.split():
-        yield word + " "
-        time.sleep(0.03)
-
-
 query = st.text_input("Ask for movie recommendations:")
 
-if st.button("Recommend", use_container_width=True) and query:
-    st.write(f"**You:** {query}")
+if st.button("Recommend") and query:
 
-    with st.status("Agent thinking...", expanded=True) as status:
-        st.write("Fetching from local database...")
+    with st.spinner("🤖 Thinking... Please wait"):
         result = agent.invoke({"query": query})
+    titles = result.get("movie_titles", [])
 
-        titles = result.get("movie_titles", [])
-        failed = result.get("failed_movies", [])
-        verified = result.get("verified", False)
+    st.subheader("🎯 Recommendations")
 
-        if titles:
-            st.write(f"Generated: {', '.join(titles)}")
+    if titles:
+        cols = st.columns(len(titles))
 
-        if verified:
-            st.write("Verification: all movies confirmed via web")
-        else:
-            st.write(f"Verification: {', '.join(failed) if failed else 'low confidence'} — falling back to internet search")
+        for i, title in enumerate(titles):
+            details = get_movie_details(title)
 
-        status.update(label="Done", state="complete")
+            with cols[i]:
+                if details and details["poster"]:
+                    st.image(details["poster"], width=200)
 
-    st.write_stream(word_streamer(result["response"]))
+                st.markdown(f"### {title}")
+
+                if details:
+                    st.write(f"⭐ Rating: {details['rating']}")
+                    if details["overview"]:
+                        st.caption(details["overview"][:150] + "...")
+                else:
+                    st.write("Details not found")
+
+    st.divider()
+
+    st.subheader("💬 Explanation")
+
+    for line in result["response"].split("\n"):
+        if line.strip():
+            st.markdown(f"- {line}")
